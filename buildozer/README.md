@@ -18,8 +18,8 @@ go get github.com/bazelbuild/buildtools/buildozer
 buildozer [OPTIONS] ['command args' | -f FILE ] label-list
 ```
 
-Here, `label-list` is a comma-separated list of Bazel labels, for example
-`//path/to/pkg1:rule1, //path/to/pkg2:rule2`. Buildozer reads commands from
+Here, `label-list` is a space-separated list of Bazel labels, for example
+`//path/to/pkg1:rule1 //path/to/pkg2:rule2`. Buildozer reads commands from
 `FILE` (`-` for stdin (format: `|`-separated command line arguments to buildozer,
 excluding flags))
 
@@ -254,10 +254,11 @@ bazel query --output=build //path/to/BUILD
 
 Use `buildozer -f <file>` to load a list of commands from a file. The usage is
 just like arguments on the command-line, except that arguments are separated by
-`|`.
+`|`. Lines that start with `#` are ignored.
 
 ```shell
 $ cat /tmp/cmds
+# a comment
 new cc_library foo|//buildtools/buildozer/BUILD
 add deps //base //strings|add srcs foo.cc|//buildtools/buildozer:foo
 add deps :foo|//buildtools/buildozer

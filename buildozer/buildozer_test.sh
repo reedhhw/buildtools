@@ -1387,6 +1387,14 @@ cc_library(name = "a")'
   assert_output 'Hello'
 }
 
+function test_rule_print_comment_with_suffix_and_after() {
+  in='# Hello Before
+cc_library(name = "a") # Hello Suffix
+# Hello After'
+  run "$in" 'print_comment' //pkg:a
+  assert_output 'Hello Before Hello Suffix Hello After'
+}
+
 function test_attribute_print_comment() {
   in='cc_library(
     name = "a",
@@ -1488,7 +1496,9 @@ EOF
 new cc_library baz|//a/pkg1:__pkg__
 add deps a|//a/pkg1:baz
 add deps a|a/pkg1:foo
-add deps x|a/pkg2:foo
+add deps x#|a/pkg2:foo
+# add deps y|a/pkg1:foo
+  # add deps y|a/pkg2:foo
 
 add deps y|a/pkg2:bar|add deps c|a/pkg1:foo
 add deps z|a/pkg2:bar
@@ -1524,7 +1534,7 @@ EOF
   cat > expected_pkg_2 <<EOF
 cc_library(
     name = "foo",
-    deps = ["x"],
+    deps = ["x#"],
 )
 
 cc_library(
@@ -1808,6 +1818,39 @@ function test_set_config_string() {
     config = "foo",
     deps = ["//buildifier:build"],
 )'
+}
+
+function test_fix_unused_load() {
+  run 'load(":a.bzl", "a")
+# TODO: refactor
+
+# begin loads
+
+load(":foo.bzl", "foo")  # foo
+load(":foobar.bzl", "foobar")  # this one is actually used
+load(":baz.bzl", "baz")  # this is @unused
+load(":bar.bzl", "bar")  # bar
+
+# end loads
+
+# before
+load(":qux.bzl", "qux")
+# after
+
+foobar()' 'fix unusedLoads' 'pkg/BUILD'
+  assert_equals '# TODO: refactor
+
+# begin loads
+
+load(":foobar.bzl", "foobar")  # this one is actually used
+load(":baz.bzl", "baz")  # this is @unused
+
+# end loads
+
+# before
+# after
+
+foobar()'
 }
 
 run_suite "buildozer tests"

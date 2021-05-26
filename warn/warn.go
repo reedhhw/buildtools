@@ -186,6 +186,11 @@ var MultiFileWarningMap = map[string]func(f *build.File, fileReader *FileReader)
 var nonDefaultWarnings = map[string]bool{
 	"out-of-order-load":   true, // load statements should be sorted by their labels
 	"unsorted-dict-items": true, // dict items should be sorted
+	"native-android":      true, // disables native android rules
+	"native-cc":           true, // disables native cc rules
+	"native-java":         true, // disables native java rules
+	"native-proto":        true, // disables native proto rules
+	"native-py":           true, // disables native python rules
 }
 
 // fileWarningWrapper is a wrapper that converts a file warning function to a generic function.
@@ -270,7 +275,8 @@ func runWarningsFunction(category string, f *build.File, fct func(f *build.File,
 	return findings
 }
 
-func hasDisablingComment(expr build.Expr, warning string) bool {
+// HasDisablingComment checks if a node has a comment that disables a certain warning
+func HasDisablingComment(expr build.Expr, warning string) bool {
 	return edit.ContainsComments(expr, "buildifier: disable="+warning) ||
 		edit.ContainsComments(expr, "buildozer: disable="+warning)
 }
@@ -297,7 +303,7 @@ func DisabledWarning(f *build.File, findingLine int, warning string) bool {
 			return
 		}
 
-		if hasDisablingComment(expr, warning) {
+		if HasDisablingComment(expr, warning) {
 			disabled = true
 			return
 		}

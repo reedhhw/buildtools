@@ -229,7 +229,7 @@ def bar():
     pass
     return 2
 
-[f() for i in range(3)] # top-level comprehension is okay
+[f() for i in rang(3)] # top-level comprehension is okay
 `,
 		[]string{},
 		scopeEverywhere)
@@ -422,7 +422,7 @@ load(":bar.bzl", "s1")
 foo(name = s1)`,
 		[]string{
 			":1: Loaded symbol \"s2\" is unused.",
-			":2: Symbol \"s1\" has already been loaded on line 1.",
+			":2: A different symbol \"s1\" has already been loaded on line 1.",
 		},
 		scopeEverywhere)
 
@@ -472,10 +472,10 @@ a(6)
 
 a(7)`,
 		[]string{
-			":3: Symbol \"a\" has already been loaded on line 1.",
+			":3: A different symbol \"a\" has already been loaded on line 1.",
 			":5: Symbol \"a\" has already been loaded on line 3.",
-			":7: Symbol \"a\" has already been loaded on line 5.",
-			":9: Symbol \"a\" has already been loaded on line 7.",
+			":7: A different symbol \"a\" has already been loaded on line 5.",
+			":9: A different symbol \"a\" has already been loaded on line 7.",
 			":11: Symbol \"a\" has already been loaded on line 9.",
 			":13: Symbol \"a\" has already been loaded on line 11.",
 		},
@@ -571,6 +571,21 @@ def foo(x):
   else:
     for t in maybe_empty:  
       pass
+
+  print(t)
+`,
+		[]string{
+			":8: Variable \"t\" may not have been initialized.",
+		},
+		scopeEverywhere)
+
+	checkFindings(t, "uninitialized", `
+def foo(x):
+  if bar:
+    t = 1
+  else:
+    for y in maybe_empty:  
+      return
 
   print(t)
 `,
@@ -793,6 +808,36 @@ def f():
 `,
 		[]string{
 			":7: Variable \"x\" may not have been initialized.",
+		},
+		scopeEverywhere)
+
+	checkFindings(t, "uninitialized", `
+def foo(x):
+  for y in x:
+    if foo:
+      break
+    elif bar:
+      continue
+    elif baz:
+      return
+    else:
+      z = 3
+    print(z)
+`,
+		[]string{},
+		scopeEverywhere)
+
+	checkFindings(t, "uninitialized", `
+def foo(x: int, y: int = 2):
+  if bar:
+    x = 1
+    y = 2
+    z = 3
+
+  print(x + y + z)
+`,
+		[]string{
+			":7: Variable \"z\" may not have been initialized.",
 		},
 		scopeEverywhere)
 }

@@ -196,13 +196,7 @@ func (p *printer) statements(rawStmts []Expr) {
 	}
 
 	for i, stmt := range stmts {
-		switch stmt := stmt.(type) {
-		case *CommentBlock:
-			// comments already handled
-
-		default:
-			p.expr(stmt, precLow)
-		}
+		p.expr(stmt, precLow)
 
 		// A CommentBlock is an empty statement without a body,
 		// it doesn't need an line break after the body
@@ -407,11 +401,19 @@ func (p *printer) expr(v Expr, outerPrec int) {
 	default:
 		panic(fmt.Errorf("printer: unexpected type %T", v))
 
+	case *CommentBlock:
+		// CommentBlock has no body
+
 	case *LiteralExpr:
 		p.printf("%s", v.Token)
 
 	case *Ident:
 		p.printf("%s", v.Name)
+
+	case *TypedIdent:
+		p.expr(v.Ident, precLow)
+		p.printf(": ")
+		p.expr(v.Type, precLow)
 
 	case *BranchStmt:
 		p.printf("%s", v.Token)
@@ -646,6 +648,10 @@ func (p *printer) expr(v Expr, outerPrec int) {
 		p.printf("def ")
 		p.printf(v.Name)
 		p.seq("()", &v.StartPos, &v.Params, nil, modeDef, v.ForceCompact, v.ForceMultiLine)
+		if v.Type != nil {
+			p.printf(" -> ")
+			p.expr(v.Type, precLow)
+		}
 		p.printf(":")
 		p.nestedStatements(v.Body)
 

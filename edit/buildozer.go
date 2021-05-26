@@ -44,18 +44,20 @@ import (
 
 // Options represents choices about how buildozer should behave.
 type Options struct {
-	Stdout            bool     // write changed BUILD file to stdout
-	Buildifier        string   // path to buildifier binary
-	Parallelism       int      // number of cores to use for concurrent actions
-	NumIO             int      // number of concurrent actions
-	CommandsFile      string   // file name to read commands from, use '-' for stdin (format:|-separated command line arguments to buildozer, excluding flags
-	KeepGoing         bool     // apply all commands, even if there are failures
-	FilterRuleTypes   []string // list of rule types to change, empty means all
-	PreferEOLComments bool     // when adding a new comment, put it on the same line if possible
-	RootDir           string   // If present, use this folder rather than $PWD to find the root dir
-	Quiet             bool     // suppress informational messages.
-	EditVariables     bool     // for attributes that simply assign a variable (e.g. hdrs = LIB_HDRS), edit the build variable instead of appending to the attribute.
-	IsPrintingProto   bool     // output serialized devtools.buildozer.Output protos instead of human-readable strings
+	Stdout            bool      // write changed BUILD file to stdout
+	Buildifier        string    // path to buildifier binary
+	Parallelism       int       // number of cores to use for concurrent actions
+	NumIO             int       // number of concurrent actions
+	CommandsFiles     []string  // file names to read commands from, use '-' for stdin (format:|-separated command line arguments to buildozer, excluding flags
+	KeepGoing         bool      // apply all commands, even if there are failures
+	FilterRuleTypes   []string  // list of rule types to change, empty means all
+	PreferEOLComments bool      // when adding a new comment, put it on the same line if possible
+	RootDir           string    // If present, use this folder rather than $PWD to find the root dir
+	Quiet             bool      // suppress informational messages.
+	EditVariables     bool      // for attributes that simply assign a variable (e.g. hdrs = LIB_HDRS), edit the build variable instead of appending to the attribute.
+	IsPrintingProto   bool      // output serialized devtools.buildozer.Output protos instead of human-readable strings
+	OutWriter         io.Writer // where to write normal output (`os.Stdout` will be used if not specified)
+	ErrWriter         io.Writer // where to write error output (`os.Stderr` will be used if not specified)
 }
 
 // NewOpts returns a new Options struct with some defaults set.
@@ -65,8 +67,6 @@ func NewOpts() *Options {
 
 // Usage is a user-overridden func to print the program usage.
 var Usage = func() {}
-
-var fileModified = false // set to true when a file has been fixed
 
 const stdinPackageName = "-" // the special package name to represent stdin
 
@@ -158,6 +158,12 @@ func cmdPrintComment(opts *Options, env CmdEnvironment) (*build.File, error) {
 	case 0: // Print rule comment.
 		env.output.Fields = []*apipb.Output_Record_Field{
 			{Value: &apipb.Output_Record_Field_Text{commentsText(env.Rule.Call.Comments.Before)}},
+		}
+		if text := commentsText(env.Rule.Call.Comments.Suffix); text != "" {
+			env.output.Fields = append(env.output.Fields, &apipb.Output_Record_Field{Value: &apipb.Output_Record_Field_Text{text}})
+		}
+		if text := commentsText(env.Rule.Call.Comments.After); text != "" {
+			env.output.Fields = append(env.output.Fields, &apipb.Output_Record_Field{Value: &apipb.Output_Record_Field_Text{text}})
 		}
 	case 1: // Print attribute comment.
 		attr := env.Rule.AttrDefn(env.Args[0])
@@ -337,7 +343,7 @@ func cmdPrint(opts *Options, env CmdEnvironment) (*build.File, error) {
 		} else if str == "endline" {
 			fields[i] = &apipb.Output_Record_Field{Value: &apipb.Output_Record_Field_Number{int32(env.Rule.Call.End.Pos.Line)}}
 		} else if value == nil {
-			fmt.Fprintf(os.Stderr, "rule \"//%s:%s\" has no attribute \"%s\"\n",
+			fmt.Fprintf(opts.ErrWriter, "rule \"//%s:%s\" has no attribute \"%s\"\n",
 				env.Pkg, env.Rule.Name(), str)
 			fields[i] = &apipb.Output_Record_Field{Value: &apipb.Output_Record_Field_Error{Error: apipb.Output_Record_Field_MISSING}}
 		} else if lit, ok := value.(*build.LiteralExpr); ok {
@@ -769,16 +775,16 @@ type command struct {
 
 // checkCommandUsage checks the number of argument of a command.
 // It prints an error and usage when it is not valid.
-func checkCommandUsage(name string, cmd CommandInfo, count int) {
+func checkCommandUsage(opts *Options, name string, cmd CommandInfo, count int) {
 	if count >= cmd.MinArg && (cmd.MaxArg == -1 || count <= cmd.MaxArg) {
 		return
 	}
 
 	if count < cmd.MinArg {
-		fmt.Fprintf(os.Stderr, "Too few arguments for command '%s', expected at least %d.\n",
+		fmt.Fprintf(opts.ErrWriter, "Too few arguments for command '%s', expected at least %d.\n",
 			name, cmd.MinArg)
 	} else {
-		fmt.Fprintf(os.Stderr, "Too many arguments for command '%s', expected at most %d.\n",
+		fmt.Fprintf(opts.ErrWriter, "Too many arguments for command '%s', expected at most %d.\n",
 			name, cmd.MaxArg)
 	}
 	Usage()
@@ -808,12 +814,12 @@ func SplitOnSpaces(input string) []string {
 //   whitespace
 // - a target all commands that are parsed during one call to parseCommands
 //   should be applied on
-func parseCommands(args []string) (commands []command, targets []string) {
+func parseCommands(opts *Options, args []string) (commands []command, targets []string) {
 	for _, arg := range args {
 		commandTokens := SplitOnSpaces(arg)
 		cmd, found := AllCommands[commandTokens[0]]
 		if found {
-			checkCommandUsage(commandTokens[0], cmd, len(commandTokens)-1)
+			checkCommandUsage(opts, commandTokens[0], cmd, len(commandTokens)-1)
 			commands = append(commands, command{commandTokens})
 		} else {
 			targets = append(targets, arg)
@@ -986,7 +992,7 @@ func rewrite(opts *Options, commandsForFile commandsForFile) *rewriteResult {
 	}
 
 	if opts.Stdout || name == stdinPackageName {
-		os.Stdout.Write(ndata)
+		opts.OutWriter.Write(ndata)
 		return &rewriteResult{file: name, errs: errs, records: records}
 	}
 
@@ -1002,7 +1008,6 @@ func rewrite(opts *Options, commandsForFile commandsForFile) *rewriteResult {
 		return &rewriteResult{file: name, errs: []error{err}, records: records}
 	}
 
-	fileModified = true
 	return &rewriteResult{file: name, errs: errs, modified: true, records: records}
 }
 
@@ -1099,7 +1104,7 @@ func findBuildFiles(rootDir string) []string {
 // appendCommands adds the given commands to be applied to each of the given targets
 // via the commandMap.
 func appendCommands(opts *Options, commandMap map[string][]commandsForTarget, args []string) {
-	commands, targets := parseCommands(args)
+	commands, targets := parseCommands(opts, args)
 	for _, target := range targets {
 		for _, buildFileName := range BuildFileNames {
 			if strings.HasSuffix(target, filepath.FromSlash("/"+buildFileName)) {
@@ -1121,16 +1126,18 @@ func appendCommands(opts *Options, commandMap map[string][]commandsForTarget, ar
 	}
 }
 
-func appendCommandsFromFile(opts *Options, commandsByFile map[string][]commandsForTarget, fileName string) {
-	var reader io.Reader
-	if opts.CommandsFile == stdinPackageName {
-		reader = os.Stdin
-	} else {
-		rc := file.OpenReadFile(opts.CommandsFile)
-		reader = rc
-		defer rc.Close()
+func appendCommandsFromFiles(opts *Options, commandsByFile map[string][]commandsForTarget) {
+	for _, fileName := range opts.CommandsFiles {
+		var reader io.Reader
+		if fileName == stdinPackageName {
+			reader = os.Stdin
+		} else {
+			rc := file.OpenReadFile(fileName)
+			reader = rc
+			defer rc.Close()
+		}
+		appendCommandsFromReader(opts, reader, commandsByFile)
 	}
-	appendCommandsFromReader(opts, reader, commandsByFile)
 }
 
 func appendCommandsFromReader(opts *Options, reader io.Reader, commandsByFile map[string][]commandsForTarget) {
@@ -1143,11 +1150,11 @@ func appendCommandsFromReader(opts *Options, reader io.Reader, commandsByFile ma
 			err = nil
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error while reading commands file: %v", err)
+			fmt.Fprintf(opts.ErrWriter, "Error while reading commands file: %v", err)
 			return
 		}
-		line = strings.TrimSuffix(line, "\n")
-		if line == "" {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' {
 			continue
 		}
 		args := strings.Split(line, "|")
@@ -1191,9 +1198,15 @@ func printRecord(writer io.Writer, record *apipb.Output_Record) {
 
 // Buildozer loops over all arguments on the command line fixing BUILD files.
 func Buildozer(opts *Options, args []string) int {
+	if opts.OutWriter == nil {
+		opts.OutWriter = os.Stdout
+	}
+	if opts.ErrWriter == nil {
+		opts.ErrWriter = os.Stderr
+	}
 	commandsByFile := make(map[string][]commandsForTarget)
-	if opts.CommandsFile != "" {
-		appendCommandsFromFile(opts, commandsByFile, opts.CommandsFile)
+	if len(opts.CommandsFiles) > 0 {
+		appendCommandsFromFiles(opts, commandsByFile)
 	} else {
 		if len(args) == 0 {
 			Usage()
@@ -1209,7 +1222,7 @@ func Buildozer(opts *Options, args []string) int {
 	data := make(chan commandsForFile)
 
 	if opts.NumIO < 1 {
-		fmt.Fprintf(os.Stderr, "NumIO must be at least 1; got %d (are you using `NewOpts`?)\n", opts.NumIO)
+		fmt.Fprintf(opts.ErrWriter, "NumIO must be at least 1; got %d (are you using `NewOpts`?)\n", opts.NumIO)
 		return 1
 	}
 	for i := 0; i < opts.NumIO; i++ {
@@ -1225,18 +1238,20 @@ func Buildozer(opts *Options, args []string) int {
 	}
 	close(data)
 	records := []*apipb.Output_Record{}
-	hasErrors := false
+	var hasErrors bool
+	var fileModified bool
 	for i := 0; i < numFiles; i++ {
 		fileResults := <-results
 		if fileResults == nil {
 			continue
 		}
 		hasErrors = hasErrors || len(fileResults.errs) > 0
+		fileModified = fileModified || fileResults.modified
 		for _, err := range fileResults.errs {
-			fmt.Fprintf(os.Stderr, "%s: %s\n", fileResults.file, err)
+			fmt.Fprintf(opts.ErrWriter, "%s: %s\n", fileResults.file, err)
 		}
 		if fileResults.modified && !opts.Quiet {
-			fmt.Fprintf(os.Stderr, "fixed %s\n", fileResults.file)
+			fmt.Fprintf(opts.ErrWriter, "fixed %s\n", fileResults.file)
 		}
 		if fileResults.records != nil {
 			records = append(records, fileResults.records...)
@@ -1248,10 +1263,10 @@ func Buildozer(opts *Options, args []string) int {
 		if err != nil {
 			log.Fatal("marshaling error: ", err)
 		}
-		fmt.Fprintf(os.Stdout, "%s", data)
+		fmt.Fprintf(opts.OutWriter, "%s", data)
 	} else {
 		for _, record := range records {
-			printRecord(os.Stdout, record)
+			printRecord(opts.OutWriter, record)
 		}
 	}
 

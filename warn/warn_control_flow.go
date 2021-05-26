@@ -332,10 +332,13 @@ func unusedLoadWarning(f *build.File) []*LinterFinding {
 					load.To = append(load.To[:i], load.To[i+1:]...)
 					load.From = append(load.From[:i], load.From[i+1:]...)
 					i--
+                                	loadFindings = append(loadFindings, makeLinterFinding(to,
+                                        	fmt.Sprintf("Symbol %q has already been loaded on line %d. Please remove it.", to.Name, origin.line)))
+	                                continue
 				}
 
 				loadFindings = append(loadFindings, makeLinterFinding(to,
-					fmt.Sprintf("Symbol %q has already been loaded on line %d. Please remove it.", to.Name, origin.line)))
+					fmt.Sprintf("A different symbol %q has already been loaded on line %d. Please use a different local name.", to.Name, origin.line)))
 				continue
 			}
 			_, ok := symbols[to.Name]
@@ -418,7 +421,7 @@ func collectLocalVariables(stmts []build.Expr) []*build.Ident {
 // terminated explicitly (by return or fail() statements) and a map of variables that are guaranteed
 // to be defined by `stmts`.
 func findUninitializedVariables(stmts []build.Expr, previouslyInitialized map[string]bool, callback func(*build.Ident)) (bool, map[string]bool) {
-	// Variables that are guaranteed to be de initialized
+	// Variables that are guaranteed to be initialized
 	locallyInitialized := make(map[string]bool) // in the local block of `stmts`
 	initialized := make(map[string]bool)        // anywhere before the current line
 	for key := range previouslyInitialized {
@@ -465,6 +468,10 @@ func findUninitializedVariables(stmts []build.Expr, previouslyInitialized map[st
 		case *build.ReturnStmt:
 			findUninitializedIdents(stmt, callback)
 			return true, locallyInitialized
+		case *build.BranchStmt:
+			if stmt.Token == "break" || stmt.Token == "continue" {
+				return true, locallyInitialized
+			}
 		case *build.ForStmt:
 			// Although loop variables are defined as local variables, buildifier doesn't know whether
 			// the collection will be empty or not.
@@ -527,27 +534,6 @@ func findUninitializedVariables(stmts []build.Expr, previouslyInitialized map[st
 	return false, locallyInitialized
 }
 
-func getFunctionParams(def *build.DefStmt) []*build.Ident {
-	params := []*build.Ident{}
-	for _, node := range def.Params {
-		switch node := node.(type) {
-		case *build.Ident:
-			params = append(params, node)
-		case *build.UnaryExpr:
-			// either *args or **kwargs
-			if ident, ok := node.X.(*build.Ident); ok {
-				params = append(params, ident)
-			}
-		case *build.AssignExpr:
-			// x = value
-			if ident, ok := node.LHS.(*build.Ident); ok {
-				params = append(params, ident)
-			}
-		}
-	}
-	return params
-}
-
 // uninitializedVariableWarning warns about usages of values that may not have been initialized.
 func uninitializedVariableWarning(f *build.File) []*LinterFinding {
 	findings := []*LinterFinding{}
@@ -566,8 +552,10 @@ func uninitializedVariableWarning(f *build.File) []*LinterFinding {
 
 		// Function parameters are guaranteed to be defined everywhere in the function, even if they
 		// are redefined inside the function body. They shouldn't be taken into consideration.
-		for _, ident := range getFunctionParams(def) {
-			delete(localVars, ident.Name)
+		for _, param := range def.Params {
+			if name, _ := build.GetParamName(param); name != "" {
+				delete(localVars, name)
+			}
 		}
 
 		// Search for all potentially initialized variables in the function body
